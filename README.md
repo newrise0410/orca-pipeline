@@ -74,7 +74,7 @@ python skills/orca-pipeline/scripts/discover_models.py
 
 1. **`CLI 기본값 그대로`**: `--model` 및 `--effort`를 지정하지 않고 각 에이전트 CLI의 현재 기본 설정을 사용합니다. 모델 변경에 구애받지 않는 가장 안정적인 옵션입니다.
 2. Codex `[profiles.*]` 프리셋
-3. Claude **별칭** (`opus`/`sonnet`/`haiku`): `claude --help`에 *"an alias for the latest model"*로 정의되어 있어 최신 모델 업데이트가 자동 반영됩니다.
+3. Claude **별칭**: `claude --help`에 *"an alias for the latest model"*로 정의되어 있어 최신 모델 업데이트가 자동 반영됩니다. 별칭 목록도 그 도움말에서 파싱하므로 이 문서에 고정해 적지 않습니다 (실측 예: `fable`/`opus`/`sonnet`).
 4. Codex 동적 탐색 id
 5. 특정 역할 전용 effort 상향 옵션
 
@@ -94,10 +94,13 @@ Claude Code 환경에서 아래 명령어를 실행합니다.
 
 ```
 /plugin marketplace add newrise0410/orca-pipeline
-/plugin install orca-pipeline
+/plugin install orca-pipeline@newrise0410
 ```
 
-- 업데이트: `/plugin update orca-pipeline`
+플러그인은 `<플러그인명>@<마켓플레이스명>` 으로 식별됩니다. 이 저장소의 마켓플레이스명은
+`newrise0410` 이므로 `@newrise0410` 을 빼면 플러그인을 찾지 못합니다.
+
+- 업데이트: `/plugin update orca-pipeline@newrise0410`
 - 자체 버전 관리 및 업데이트 기능을 온전히 지원하는 권장 설치 경로입니다.
 
 > **주의:** 기존에 `~/.claude/skills/orca-pipeline/` 경로에 수동으로 복사해 사용 중이었다면 플러그인 설치 후 해당 수동 디렉터리를 삭제해 주세요. 동일한 이름의 스킬이 중복 인식될 수 있습니다.
@@ -151,7 +154,7 @@ cp -r skills/orca-pipeline ~/.claude/skills/
 
 - *"파이프라인으로 돌려줘"*
 - *"기획 → 검수 → 실행으로 진행해줘"*
-- *"아스트라로 기획하고 클로드로 검수해줘"*
+- *"코덱스로 기획하고 클로드로 검수해줘"*
 - *"세션 재사용해서 진행"*
 
 각 작업 단위(Unit)마다 **[기획 → 검수 → 실행]** 순서로 1사이클이 수행되며, 후속 작업 단위에서도 앞서 생성된 기획 및 실행 세션을 그대로 재사용하여 작업 연속성을 유지합니다.
@@ -160,11 +163,85 @@ cp -r skills/orca-pipeline ~/.claude/skills/
 
 ## 요구사항
 
-- **Orca** 1.4.x 이상 및 런타임 활성화 상태 (`orca status --json` 기준 `state: ready`)
+- **Orca** 런타임 활성화 상태 (`orca status --json` 기준 `state: ready`). 개발·실측 환경은
+  1.4.197~1.4.199 입니다. 하위 호환 최소 버전은 확인하지 않았으므로, `worker-start`가
+  `--model`/`--effort`/`--terminal` 조합을 거부한다면 Orca를 먼저 업데이트하세요.
 - Orca 설정(Settings → Experimental) 내 **orchestration** 기능 활성화
 - **루트(Coordinator) 터미널에서 실행 필수:** Orca의 기본 중첩 워커 깊이(nested worker depth) 제한은 1입니다. 워커 세션 내부에서 중첩 호출할 경우 `nested_worker_depth_exceeded` 에러로 실패합니다. (이는 비정상 우회 대신 즉시 원인을 보고하고 중단하는 것이 올바른 동작입니다.)
 - 각 역할에 지정할 에이전트 CLI가 시스템 환경변수(`PATH`)에 등록되어 있어야 합니다.
 - `--model` 및 `--effort` 옵션은 **Claude, Codex, Cursor** CLI에만 전달됩니다. 다른 에이전트 CLI를 지정한 경우 해당 플래그를 자동으로 제외한 뒤 안내 메시지를 출력합니다.
+
+---
+
+## 알려진 함정
+
+### 기억한 모델명은 틀립니다 — 슬러그를 탐색해야 합니다
+
+이 저장소가 모델명을 하드코딩하지 않는 이유를 실제 사례로 남깁니다.
+
+사람이 부르는 이름("아스트라")과 CLI가 받는 슬러그는 다릅니다. 기억한 이름을 그대로 넘기면:
+
+```
+$ codex exec --model astra -c model_reasoning_effort="xhigh" "Reply with exactly: OK"
+warning: Model metadata for `astra` not found. Defaulting to fallback metadata
+ERROR: {"status":400,"message":"The 'astra' model is not supported when using Codex with a ChatGPT account."}
+```
+
+400 메시지가 "이 인증으로는 못 쓴다"고 말하는 바람에 권한 문제로 오진하기 쉽습니다. 실제 원인은
+**슬러그가 틀린 것**이었습니다. 동적 탐색이 알려준 올바른 슬러그로는 정상 동작합니다:
+
+```
+$ codex exec --model gpt-6-astra -c model_reasoning_effort="xhigh" "Reply with exactly: OK"
+codex
+OK
+```
+
+탐색 결과에는 사람이 고를 수 있는 정보가 함께 담겨 있습니다:
+
+```json
+{ "slug": "gpt-6-astra", "display_name": "GPT-6-Astra",
+  "description": "Our most capable model for complex, demanding work.",
+  "default_effort": "low", "efforts": ["low","medium","high","xhigh","max","ultra"],
+  "priority": 1 }
+```
+
+덧붙여, 이 모델은 캐시를 **갱신한 뒤에야** 목록에 나타났습니다. 캐시가 구버전 클라이언트
+(0.146.0)로 기록된 동안에는 존재하지 않는 것처럼 보였습니다. 그래서 탐색 스크립트는
+`cache_fetched_at` 과 `cache_client_version` 을 함께 내보냅니다 — 목록이 비어 보이면 캐시가
+낡았는지 먼저 확인하세요. Codex를 한 번 실행하면 갱신됩니다.
+
+그래서 스킬은 고정 세션을 띄우기 전에 명시적 모델을 반드시 프로브합니다(Step 0b-2). 고정 역할이
+첫 요청에서 실패하면 세션 전체를 다시 띄워야 하기 때문입니다.
+
+주의: **`codex exec`는 요청이 실패해도 종료코드 0을 반환합니다.** 종료코드로 판정하면 실패를
+성공으로 읽습니다. 출력의 `ERROR:` 줄을 봐야 합니다.
+
+### `--model`은 메커니즘이 아니라 편의 기능입니다
+
+이 스킬의 본질은 `--terminal`로 세션을 고정하는 것입니다. `--model`은 세션이 *무엇으로 뜨는지*를
+정하는 편의 플래그일 뿐입니다. MCP로 제공되는 모델, TUI 선택기로만 고를 수 있는 모델, 현재
+인증으로 권한이 없는 모델이라면 — CLI 기본값으로 띄우고 세션 안에서 모델을 고르면 됩니다.
+실행 플래그 하나 때문에 파이프라인을 멈추지 마십시오.
+
+### `CODEX_HOME` 이 Orca 계정으로 재지정되어 있습니다
+
+Orca 터미널 안에서는 `CODEX_HOME`이 Orca 계정 홈을 가리킵니다. 그 결과 Codex 공식 설치
+스크립트와 `codex update`가 **자기 설치를 인식하지 못하고 실패합니다**:
+
+```
+Refusing to retarget junction at ...\Programs\OpenAI\Codex\bin because it is not managed by this installer.
+Error: Could not detect the Codex installation method.
+```
+
+`...\Programs\OpenAI\Codex\bin` 은 PATH 전역 항목이라 특정 계정 홈을 가리켜선 안 되므로 이
+거부는 옳은 동작입니다. Codex를 업데이트할 때는 Orca 밖의 일반 셸에서 실행하거나, 그 명령에만
+변수를 덮어쓰세요:
+
+```powershell
+$env:CODEX_HOME="$env:USERPROFILE\.codex"; irm https://chatgpt.com/codex/install.ps1 | iex
+```
+
+같은 창에서 이후 Codex를 실행하면 계정 격리가 빠진 상태로 뜨므로, 업데이트 후 창을 닫으세요.
 
 ---
 

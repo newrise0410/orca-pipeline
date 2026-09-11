@@ -107,7 +107,57 @@ Suggested defaults to steer toward, without naming models:
 | 기획검수 | **기획과 다른 제공자**를 권한다 — 같은 모델끼리는 같은 맹점을 공유한다 |
 | 실행 | CLI 기본값으로 충분한 경우가 대부분 |
 
+If a model's `efforts` array is empty (the cache carried no
+`supported_reasoning_levels`), omit `--effort` for that model rather than guessing a
+level — `--effort` requires `--model`, but not the reverse.
+
 Then echo the final staffing table back to the user before launching anything.
+
+### 0b-2. 명시적 모델은 띄우기 전에 검증한다 (필수)
+
+Discovery lists what the CLI advertises. It does **not** prove the account may use a
+given model, and the user can always answer "Other" with a model discovery never saw.
+A pinned role that fails on its first request costs a full relaunch, so validate first.
+
+Skip this only when the answer was "CLI 기본값 그대로" (nothing to validate).
+
+For a codex model, one cheap non-interactive probe:
+
+```bash
+codex exec --model <slug> -c model_reasoning_effort="<effort>" "Reply with exactly: OK"
+```
+
+Read the result carefully — `codex exec` **exits 0 even when the request failed**, so the
+exit code proves nothing. Look for these in the output instead:
+
+- `warning: Model metadata for '<slug>' not found. Defaulting to fallback metadata` —
+  the CLI does not know this slug. Treat it as a **wrong-slug signal**, because the
+  request usually 400s right after.
+- `ERROR: {... "status":400 ... "message":"The '<slug>' model is not supported when using
+  Codex with a ChatGPT account."}` — **do not read this as an entitlement problem.**
+  Observed reality: the human-facing name (`astra`) produced exactly this message, while
+  the discovered slug (`gpt-6-astra`) worked on the same account and auth. Check the slug
+  against Step 0a's `models[]` before concluding anything about permissions.
+- A plain model reply with no warning and no `ERROR:` line — validated.
+
+If the slug is absent from `models[]`, suspect a stale cache before suspecting the
+account: compare `cache_client_version` against the installed CLI version. `gpt-6-astra`
+was missing while the cache was written by an older client and appeared once a current
+client refreshed it. Running codex once refreshes it.
+
+For a Claude model, prefer a discovered **alias** — an alias cannot be stale by
+construction, which is most of why validation is needed at all.
+
+If validation fails, **stop and ask the user** with the exact error. Do not pick a
+replacement yourself: the model was their explicit choice, and the nearest reachable
+substitute is a judgement call about cost and depth, not a detail.
+
+> A note on scope, because it is easy to overweight. `--model`/`--effort` are a
+> convenience for what the session *launches* with. They are not the mechanism of this
+> skill — pinned sessions via `--terminal` are. If a role needs a model the CLI cannot
+> launch with (an MCP-provided model, a picker-only model, an entitlement this auth
+> lacks), launch the agent on its own default and let the session select the model
+> internally. Do not block the pipeline on a launch flag.
 
 ### 0c. 세션 정책
 
@@ -121,10 +171,17 @@ The reviewer is fresh by design: it must judge the plan without having watched i
 written. The planner and builder are pinned by design: their value grows with
 accumulated context. State this policy and proceed unless the user overrides it.
 
-Valid `--agent` ids on this build: `claude`, `codex`, `cursor`, `opencode`, `gemini`,
-`droid`, `grok`, `omp`, `pi`. **`--model` / `--effort` are forwarded only for Claude,
-Codex, and Cursor.** If the user picks another agent, drop both flags and say so — do
-not silently pass them.
+**`--model` / `--effort` are forwarded only for Claude, Codex, and Cursor.** If the user
+picks another agent, drop both flags and say so — do not silently pass them.
+
+`--agent` takes "a known TUI agent" id; the CLI does not enumerate them and neither does
+`agent-context`, so do not recite a list as authoritative. Orca's own guides mention
+`claude`, `codex`, `cursor`, `opencode`, `omp`, `pi`, and `grok`, and group addresses
+additionally reference `gemini` and `droid` — but a group address is not proof that the
+same string works as an `--agent` id. Offer `claude` / `codex` / `cursor` by default
+(they also accept `--model`/`--effort`); for anything else, say it is unverified and let
+`worker-start` be the check — an unknown id fails at launch with a clear error, which is
+cheap. Never claim an id is valid because this file lists it.
 
 ---
 
@@ -146,7 +203,15 @@ ORCA status --json                       # runtime must be ready
 ORCA orchestration run-create --objective "<전체 목표>" --json
 ```
 
-Artifacts go in a run directory so roles hand off by file, not by pasted text:
+Read `run.id` out of the `run-create` receipt — every artifact path below is keyed on it.
+
+Artifacts go in a run directory so roles hand off by file, not by pasted text. **The
+coordinator creates it before the first dispatch**; do not leave it to a worker, whose
+first write would otherwise fail on a missing parent:
+
+```bash
+mkdir -p ".orca-pipeline/<run_id>"
+```
 
 ```
 .orca-pipeline/<run_id>/<NN>-plan.md      # planner writes
@@ -309,6 +374,10 @@ ORCA orchestration task-list --json      # confirm every task settled
 - One Run per pipeline. Create or bind it once; do not create a Run per unit.
 - Never name a model from memory. Every model id shown to the user comes from Step 0a
   discovery, or the option omits `--model` altogether.
+- Never pin a role on an unvalidated explicit model. Run Step 0b-2 first, and remember
+  that `codex exec` exits 0 on a failed request — read its output, not its exit code.
+- When a launch flag cannot express what the user wants, launch on the CLI default and
+  say so. Do not stall the pipeline over `--model`.
 - Do not release a worker on timeout, TUI idle, heartbeat, status, question, escalation,
   or a stale `worker_done`.
 - If `worker-start` exits nonzero, inspect `stage`, `effects`, and `residualResources`

@@ -1,0 +1,37 @@
+{
+  "name": "orca-pipeline",
+  "version": "0.3.0",
+  "description": "Three-role Orca pipeline (기획 → 기획검수 → 실행) on pinned agent sessions that survive across tasks.",
+  "homepage": "https://github.com/newrise0410/orca-pipeline#readme",
+  "repository": "https://github.com/newrise0410/orca-pipeline",
+  "license": "MIT",
+  "author": {
+    "name": "newrise0410"
+  },
+  "keywords": [
+    "codex",
+    "codex-plugin",
+    "orca",
+    "orchestration",
+    "multi-agent",
+    "session-reuse"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Orca Pipeline",
+    "developerName": "newrise0410",
+    "shortDescription": "Plan, review, and build on pinned Orca agent sessions",
+    "longDescription": "Runs work through a fixed three-role Orca pipeline — planner, reviewer, builder — pinning one agent terminal per role and reusing it across tasks via --terminal, instead of letting worker-start spawn a fresh session for every task. The planner and builder stay warm so context accumulates; the reviewer relaunches cold every time so it judges a plan it did not watch being written. Model ids and effort levels are discovered from each agent CLI's own configuration rather than hardcoded.",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Workflow",
+      "Orchestration"
+    ],
+    "defaultPrompt": [
+      "Run the discovery script before offering any model choice; never name a model from memory.",
+      "Pin each role's terminal handle on first launch and reuse it with --terminal for every later task.",
+      "Probe an explicit model before pinning a role on it — codex exec exits 0 even when the request failed."
+    ],
+    "screenshots": []
+  }
+}

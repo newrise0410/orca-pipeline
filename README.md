@@ -63,10 +63,13 @@ python skills/orca-pipeline/scripts/discover_models.py
 2. **`CODEX_HOME`은 계정 단위로 분리됩니다.**  
    Orca가 Codex 계정별로 환경변수를 재지정하므로, 한 머신 내에도 여러 캐시가 존재할 수 있고 **계정마다 모델 목록과 기본값이 서로 다릅니다.** (실측 예시):
 
-| 홈 경로 | 기본값 | 확인 가능한 모델 수 |
+| 홈 경로 | 기본값 | 확인 가능한 모델 |
 |---|---|---|
 | `~/.codex` | `gpt-5.6-luna` / `medium` | 6개 (`gpt-5.4`, `gpt-5.4-mini` 포함) |
-| Orca 계정 전용 홈 | `gpt-5.6-terra` / `xhigh` | 4개 |
+| Orca 계정 전용 홈 | `gpt-6-astra` / `xhigh` | 5개 (`gpt-6-astra` 포함, `gpt-5.4` 계열 없음) |
+
+같은 머신, 같은 시점인데 기본 모델도 목록도 다릅니다. 위 표의 `gpt-6-astra` 는 캐시를
+갱신한 뒤에야 나타났습니다 — 아래 [알려진 함정](#기억한-모델명은-틀립니다--슬러그를-탐색해야-합니다) 참고.
 
 스크립트는 현재 활성화된 계정 홈의 목록만 수집하며, 다른 홈 경로(`other_homes`)는 단순 경로 정보만 제공합니다. 계정별 권한 범위가 다르므로 임의로 병합하지 않습니다. 모델 목록이 올바르지 않다면 `home` 및 `home_from_env` 값을 먼저 확인하세요.
 
@@ -105,9 +108,28 @@ Claude Code 환경에서 아래 명령어를 실행합니다.
 
 > **주의:** 기존에 `~/.claude/skills/orca-pipeline/` 경로에 수동으로 복사해 사용 중이었다면 플러그인 설치 후 해당 수동 디렉터리를 삭제해 주세요. 동일한 이름의 스킬이 중복 인식될 수 있습니다.
 
-### 2. git clone + 심볼릭 링크
+### 2. Codex 플러그인
 
-Claude Code 플러그인 시스템을 사용하지 않는 환경(Codex, 자체 구축 하네스 등)에 적합합니다.
+```bash
+codex plugin marketplace add newrise0410/orca-pipeline
+codex plugin add orca-pipeline@newrise0410
+```
+
+Codex 세션에서 `orca-pipeline:orca-pipeline` 으로 뜹니다. 확인:
+
+```bash
+codex plugin list          # STATUS 가 "installed, enabled" 인지
+```
+
+동일한 `skills/orca-pipeline/` 를 Claude Code 와 Codex 가 공유합니다
+(`.codex-plugin/plugin.json` 의 `"skills": "./skills/"`). 스킬 본문은 한 벌만 유지됩니다.
+
+- 업그레이드: `codex plugin marketplace upgrade newrise0410`
+- 제거: `codex plugin remove orca-pipeline@newrise0410`
+
+### 3. git clone + 심볼릭 링크
+
+플러그인 시스템을 쓰지 않는 환경(자체 구축 하네스 등)이나, 저장소를 직접 수정하며 쓰고 싶을 때 적합합니다.
 
 ```bash
 git clone https://github.com/newrise0410/orca-pipeline.git ~/src/orca-pipeline
@@ -123,7 +145,7 @@ New-Item -ItemType SymbolicLink `
 
 심볼릭 링크 방식이므로 저장소에서 `git pull`만 수행하면 즉시 최신 버전으로 업데이트됩니다.
 
-### 3. 디렉터리 직접 복사
+### 4. 디렉터리 직접 복사
 
 심볼릭 링크 사용이 어려운 환경에서는 파일을 직접 복사하여 설치할 수 있습니다. (추후 업데이트는 수동으로 진행해야 합니다.)
 

@@ -1,0 +1,19 @@
+{
+  "name": "newrise0410",
+  "interface": {
+    "displayName": "Orca Pipeline"
+  },
+  "plugins": [
+    {
+      "name": "orca-pipeline",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

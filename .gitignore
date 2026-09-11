@@ -1,0 +1,4 @@
+.orca-pipeline/
+__pycache__/
+*.pyc
+.DS_Store

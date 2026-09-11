@@ -1,0 +1,24 @@
+{
+  "name": "newrise0410",
+  "owner": {
+    "name": "newrise0410"
+  },
+  "description": "Orca orchestration skills that pin agent sessions per role instead of respawning one per task.",
+  "plugins": [
+    {
+      "name": "orca-pipeline",
+      "source": "./",
+      "description": "Three-role Orca pipeline — 기획(plan) → 기획검수(review) → 실행(build) — on pinned agent terminals reused across tasks. Asks which agent/model/effort staffs each role, keeps the planner and builder warm, and runs the reviewer cold every time.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "orca",
+        "orchestration",
+        "multi-agent",
+        "session-reuse",
+        "skills"
+      ]
+    }
+  ]
+}

@@ -35,25 +35,43 @@ call, so this has to happen before anything is created.
 
 ### 0a. 모델을 하드코딩하지 말고 발견한다
 
-Model names rot fast — `gpt-5.5` → `gpt-5.6-luna`, `claude-opus-4-7` → `claude-opus-5`.
-Never write a model id into a question. Read what the CLIs are configured with **now**:
+Model names and effort levels rot fast — `gpt-5.5` → `gpt-5.6-luna`, `claude-opus-4-7`
+→ `claude-opus-5`, Claude gained a `fable` alias, and `gpt-5.6-sol` accepts an `ultra`
+effort that older models reject. Never write a model id or an effort list into a
+question. Read what the CLIs can actually reach **now**:
 
 ```bash
 python "<skill_dir>/scripts/discover_models.py"
 ```
 
-It is read-only and never raises; missing config yields `null`/`[]` plus a `warnings`
-entry. It reports, per agent:
+Read-only, never raises; a missing source yields `null`/`[]` plus a `warnings` entry.
 
-- `default_model` / `default_effort` — what that CLI uses today
-- `advertised_models` (codex) — ids the TUI has offered
-- `profiles` (codex) — named model+effort presets from `~/.codex/config.toml`
-- `aliases` (claude) — `opus` / `sonnet` / `haiku`
-- `efforts` — levels that agent accepts
+**codex** — from `<codex_home>/models_cache.json` and `<codex_home>/config.toml`:
+- `models[]` — `slug`, `display_name`, `description`, `default_effort`, and
+  **`efforts` per model**. Internal models (`visibility: "hide"`) are excluded and
+  the list is sorted by the cache's own `priority`.
+- `default_model` / `default_effort` — this home's configured default
+- `profiles` — named model+effort presets, when any exist
+- `cache_fetched_at` / `cache_client_version` — check these; a cache written by an
+  older client can predate a model release
+- `home`, `home_from_env`, `other_homes`
 
-If the script is unavailable, read the configs directly — `~/.codex/config.toml`
-(`model`, `model_reasoning_effort`, `[tui.model_availability_nux]`, `[profiles.*]`) and
-`~/.claude/settings.json` (`model`) — and say that discovery was degraded.
+**claude** — from `claude --help` and `~/.claude/settings.json`:
+- `aliases` — parsed out of the `--model` help text, not hardcoded
+- `efforts` — parsed out of the `--effort` help text
+- `default_model` — the configured model
+
+> **`CODEX_HOME` is account-scoped.** Orca redirects it per Codex account, so one
+> machine holds several caches with **different** model lists and different defaults —
+> an account may not see every model. The script reports the active home's list only
+> and never merges `other_homes`; do not merge them either. If the discovered list
+> looks wrong, check `home` and `home_from_env` first.
+
+**Efforts are per model.** Read each model's own `efforts` array. Never offer a level
+from another model or from memory.
+
+If the script is unavailable, read the sources directly and say that discovery was
+degraded rather than falling back to remembered names.
 
 ### 0b. 발견한 값으로 사용자에게 묻는다
 
@@ -71,12 +89,15 @@ Build every option from Step 0a output. Compose the option list in this order:
    `default_model` / `default_effort` in the option *description* so the user can see
    what they are accepting, never in the label.
 2. A discovered `profiles` entry (codex), if any exist.
-3. For Claude, an **alias**-based option (`opus` / `sonnet` / `haiku`) — `claude --help`
-   documents `--model` as taking "an alias for the latest model", so an alias tracks
-   releases on its own. Prefer aliases over any id from `models_seen`.
-4. For Codex, an explicit id drawn from `default_model` / `advertised_models`.
+3. For Claude, an option built from a discovered **alias** — `claude --help` documents
+   `--model` as taking "an alias for the latest model", so an alias tracks releases on
+   its own. Always prefer an alias over a pinned id.
+4. For Codex, a `models[]` entry, using its `display_name` + `description` in the
+   option description so the choice is legible.
 5. A higher-effort variant of the recommended option when the role warrants it
-   (planning and review benefit; routine building usually does not).
+   (planning and review benefit; routine building usually does not). Take the level
+   from **that model's own `efforts`** — `max` and `ultra` exist on some models and
+   not others.
 
 Suggested defaults to steer toward, without naming models:
 

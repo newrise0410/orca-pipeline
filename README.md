@@ -58,12 +58,31 @@ python skills/orca-pipeline/scripts/discover_models.py
 
 | 소스 | 읽는 것 |
 |---|---|
-| `~/.codex/config.toml` | `model`, `model_reasoning_effort`, `[tui.model_availability_nux]`, `[profiles.*]` |
+| `<codex_home>/models_cache.json` | 모델 목록 — `slug`, `display_name`, `description`, **모델별 effort**, `priority`. `visibility: "hide"`인 내부 모델은 제외 |
+| `<codex_home>/config.toml` | `model`, `model_reasoning_effort`, `[profiles.*]` |
+| `claude --help` | `--model` 별칭(`fable`/`opus`/`sonnet`)과 `--effort` 레벨을 도움말에서 파싱 |
 | `~/.claude/settings.json` | `model` |
-| `~/.claude.json` | 세션 이력에 등장한 모델 id (참고용) |
 
-읽기 전용이고 예외를 던지지 않습니다. 설정이 없으면 해당 필드가 `null`/`[]`이 되고
+읽기 전용이고 예외를 던지지 않습니다. 소스가 없으면 해당 필드가 `null`/`[]`이 되고
 `warnings`에 사유가 담깁니다.
+
+두 가지가 특히 중요합니다.
+
+**effort는 모델별입니다.** `gpt-5.6-sol`·`gpt-5.6-terra`는 `ultra`까지 받지만
+`gpt-5.6-luna`는 `max`까지, `gpt-5.5`는 `xhigh`까지입니다. 에이전트 단위로 하나의
+목록을 두면 거부되는 레벨을 제시하게 됩니다.
+
+**`CODEX_HOME`은 계정 단위입니다.** Orca가 Codex 계정별로 이 변수를 재지정하므로 한
+머신에 캐시가 여러 개 있고 **모델 목록과 기본값이 서로 다릅니다.** 실측 예:
+
+| 홈 | 기본값 | 보이는 모델 |
+|---|---|---|
+| `~/.codex` | `gpt-5.6-luna` / `medium` | 6개 (`gpt-5.4`, `gpt-5.4-mini` 포함) |
+| Orca 계정 홈 | `gpt-5.6-terra` / `xhigh` | 4개 |
+
+스크립트는 활성 홈의 목록만 보고하고 `other_homes`는 경로만 알려줍니다 — 계정마다
+권한이 다르므로 합치면 안 됩니다. 목록이 이상하면 `home`과 `home_from_env`를 먼저
+확인하세요.
 
 선택지는 항상 이 순서로 구성되고, **첫 번째가 권장값**입니다:
 

@@ -1,8 +1,8 @@
 # orca-pipeline
 
-**기획 → 기획 검수 → 실행**, 3가지 역할을 전담 Orca 에이전트 세션에 고정하여 파이프라인 전체에서 재사용하는 오케스트레이션 스킬입니다.
+**기획 → 기획 검수 → 실행** 3역할 Orca 오케스트레이션 스킬입니다. 기획자와 실행자는 전담 세션에 고정해 파이프라인 전체에서 재사용하고, 검수자는 매 작업 단위마다 새 세션으로 띄웁니다.
 
-> A three-role Orca orchestration skill (plan → review → build) that **pins one agent terminal per role and reuses it across tasks**, instead of spawning a fresh agent session for every task.
+> A three-role Orca orchestration skill (plan → review → build) that **pins the planner's and builder's terminals and reuses them across tasks**, and launches a fresh reviewer for every unit, instead of spawning a fresh agent session for every task.
 
 ---
 
@@ -15,11 +15,11 @@ Orca 오케스트레이션을 기본 설정대로 실행하면 태스크마다 �
 이러한 동작이 발생하는 주원인은 다음과 같습니다.
 
 1. `worker-start --worktree current`는 호출할 때마다 **새로운 에이전트 터미널**을 생성합니다. 기존 세션을 재사용하는 방법은 `--terminal <handle>`을 명시하는 것뿐입니다.
-2. `worker_done` 완료 후 권장되는 `worker-release`는 **해당 터미널을 즉시 종료**합니다. 이로 인해 다음 태스크는 필연적으로 컨텍스트가 없는 콜드 세션(Cold Session)에서 다시 시작됩니다.
+2. `worker_done` 완료 후 권장되는 `worker-release`는 `worker-start`가 직접 띄운 **해당 터미널을 즉시 종료**합니다. 이로 인해 다음 태스크는 필연적으로 컨텍스트가 없는 콜드 세션(Cold Session)에서 다시 시작됩니다.
 
 그 결과 기획자는 매번 프로젝트의 맥락을 처음부터 파악해야 하고, 실행자 역시 매 태스크마다 코드베이스를 다시 분석해야 하는 비효율이 발생합니다.
 
-**orca-pipeline**은 첫 태스크 실행 시 역할별 터미널 핸들을 확보(`worker-show` → `worker.agent_terminal_handle`)한 뒤, 이후의 모든 태스크를 `--terminal <handle>`로 전달합니다. 고정된 역할 세션은 파이프라인이 종료될 때까지 해제(release)하지 않으며, 작업 대기 구간에서는 `worker-retain`을 통해 세션 보존 상태를 명시적으로 유지합니다.
+**orca-pipeline**은 첫 태스크 실행 시 기획자와 실행자의 터미널 핸들을 확보한 뒤, 두 역할의 이후 태스크를 모두 `--terminal <handle>`로 전달합니다. 고정된 세션은 파이프라인이 종료될 때까지 해제(release)하지 않으며, 작업 대기 구간에서는 `worker-retain`을 통해 세션 보존 상태를 명시적으로 유지합니다. 검수자만은 매번 새로 띄우고 검수가 끝나면 정리합니다.
 
 ---
 
@@ -33,7 +33,7 @@ Orca 오케스트레이션을 기본 설정대로 실행하면 태스크마다 �
 
 검수자 세션을 매번 새로 띄우는 것은 의도된 설계입니다. 계획을 직접 작성한 세션이 스스로 검수할 경우 무비판적으로 통과시키는 편향이 발생하기 때문입니다.
 
-검수 단계에서 반려(`VERDICT: REJECT`)가 발생하더라도 전체 파이프라인이 중단되거나 기획 단계로 되돌아가지 않습니다. 대신 반려 사유가 실행자의 작업 명세서 내 **주의사항** 섹션으로 전달되며, 실행자는 각 지적 사항을 구현에 반영하거나 미반영 사유를 `worker_done` 보고 시 반드시 명시해야 합니다. (지적 사항 묵살 불가)
+검수 단계에서 반려(`VERDICT: REJECT`)가 발생하더라도 전체 파이프라인이 중단되거나 기획 단계로 되돌아가지 않습니다. 판정과 관계없이 검수 의견 전부가 번호·등급째 실행자의 작업 명세서 내 **주의사항** 섹션으로 전달됩니다(APPROVE에 붙은 advisory도 포함). 실행자는 각 의견을 반영하거나 미반영 사유를 빌드 보고서(`<NN>-build.md`)의 처리표에 반드시 적어야 합니다. (지적 사항 묵살 불가) `worker_done` 본문은 Orca 워커 계약대로 정확히 3문장이며, 미반영 의견이 있으면 그 개수와 중요한 번호를 본문에 밝히고 보고서를 `--report-path`로 연결합니다.
 
 ---
 
@@ -54,7 +54,19 @@ python skills/orca-pipeline/scripts/discover_models.py
 | `claude --help` | `--model` 별칭(`fable`/`opus`/`sonnet`) 및 지원 `--effort` 레벨 파싱 |
 | `~/.claude/settings.json` | 기본 모델 (`model`) |
 
-이 탐색 스크립트는 읽기 전용으로 안전하게 동작하며 예외를 던져 실행을 중단시키지 않습니다. 설정 소스를 찾을 수 없는 경우 해당 필드는 `null` 또는 빈 배열(`[]`)로 처리되고 `warnings`에 그 사유가 기록됩니다.
+이 탐색 스크립트는 읽기 전용입니다. 설정 소스가 없거나, 읽을 수 없거나, 형식·타입이 잘못된 경우(깨진 JSON/TOML, TOML 날짜처럼 문자열이 아닌 값, 짝 없는 서로게이트 문자 포함)에는 해당 필드만 `null`·빈 배열(`[]`)·빈 객체로 처리하고 `warnings`에 사유를 남깁니다. 정상인 이웃 항목은 유지되고, 한 에이전트의 탐색이 실패해도 다른 에이전트의 결과는 지워지지 않으며, 출력은 항상 UTF-8 JSON 한 개입니다. 임의의 시스템 장애(예: 표준 출력이 닫힘)까지 보장하지는 않습니다.
+
+`claude --help`가 없거나, 시간 초과되거나, 0이 아닌 코드로 끝나거나, 파싱되지 않으면 `aliases`/`efforts`는 **빈 배열**입니다. 기억해 둔 이름으로 채우지 않으며, 이때 Claude는 CLI 기본값 선택지만 제공합니다. `config.toml`은 Python 3.11+의 `tomllib`로 읽으며, 그보다 낮은 Python에서는 config를 건너뛰고 경고만 남깁니다(모델 캐시는 계속 읽습니다).
+
+#### 탐색 스크립트 테스트
+
+Python 3.11+ 표준 라이브러리만 사용합니다. 저장소 루트에서:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+테스트는 `CODEX_HOME`·`APPDATA`·`USERPROFILE`·`HOME`·`Path.home()`을 임시 디렉터리로, `subprocess.run`을 가짜로 바꾸고 임시 디렉터리 밖 파일 접근이 0건인지 확인합니다. 실제 계정 파일·실제 CLI·네트워크를 쓰지 않습니다. 파싱과 실패 처리만 검증하며, 계정의 모델 사용 권한이나 실제 CLI 출력 형식을 보증하지는 않습니다.
 
 특히 유의해야 할 두 가지 핵심 사항이 있습니다.
 
@@ -179,7 +191,9 @@ cp -r skills/orca-pipeline ~/.claude/skills/
 - *"코덱스로 기획하고 클로드로 검수해줘"*
 - *"세션 재사용해서 진행"*
 
-각 작업 단위(Unit)마다 **[기획 → 검수 → 실행]** 순서로 1사이클이 수행되며, 후속 작업 단위에서도 앞서 생성된 기획 및 실행 세션을 그대로 재사용하여 작업 연속성을 유지합니다.
+각 작업 단위(Unit)마다 **[기획 → 검수 → 실행]** 순서로 1사이클이 수행되며, 후속 작업 단위에서도 앞서 생성된 기획 및 실행 세션을 그대로 재사용하여 작업 연속성을 유지합니다. 검수 세션은 단위마다 새로 뜹니다.
+
+산출물은 `.orca-pipeline/<run_id>/` 아래에 `<NN>-plan.md`·`<NN>-review.md`·`<NN>-build.md`로 남습니다(`<NN>`은 작업 단위 번호). coordinator의 진행 기록과 검증 기록은 검수자가 읽지 않는 `coordinator/` 하위 디렉터리에 둡니다. 검증 절차는 [`skills/orca-pipeline/references/validation.md`](skills/orca-pipeline/references/validation.md)에 있습니다.
 
 ---
 
@@ -192,6 +206,14 @@ cp -r skills/orca-pipeline ~/.claude/skills/
 - **루트(Coordinator) 터미널에서 실행 필수:** Orca의 기본 중첩 워커 깊이(nested worker depth) 제한은 1입니다. 워커 세션 내부에서 중첩 호출할 경우 `nested_worker_depth_exceeded` 에러로 실패합니다. (이는 비정상 우회 대신 즉시 원인을 보고하고 중단하는 것이 올바른 동작입니다.)
 - 각 역할에 지정할 에이전트 CLI가 시스템 환경변수(`PATH`)에 등록되어 있어야 합니다.
 - `--model` 및 `--effort` 옵션은 **Claude, Codex, Cursor** CLI에만 전달됩니다. 다른 에이전트 CLI를 지정한 경우 해당 플래그를 자동으로 제외한 뒤 안내 메시지를 출력합니다.
+- Claude 역할은 `orca terminal create --command "claude …"`로 터미널을 만든 뒤 `worker-start --terminal`로 연결합니다(`worker-start --agent`는 추가 실행 인자를 전달하지 못합니다). 이 경우 모델·effort는 커맨드라인에 들어갑니다.
+
+### Claude 권한 우회 플래그 (`--dangerously-skip-permissions`)
+
+Step 0에서 Claude 역할이 있으면 권한 모드를 한 번 묻습니다. **스킬이 이 플래그를 기본으로 켜지 않습니다.**
+
+- **위험:** 이 플래그는 Claude의 모든 권한 확인을 끕니다. 워커는 확인 없이 파일을 쓰고 명령을 실행합니다. 신뢰하는 저장소와 작업에만 쓰세요.
+- **끄는 방법:** Step 0 질문에서 `권한 우회 없음`을 고르거나, 이미 지정했다면 다음 파이프라인에서 다르게 지정하세요. 그러면 커맨드라인에서 플래그가 빠집니다. 다만 플래그 없이 띄운 Claude 워커가 권한 확인에서 멈추거나 바로 종료될 수 있고, 그 경로로 완주한 관측은 아직 없습니다.
 
 ---
 
@@ -237,6 +259,19 @@ OK
 
 주의: **`codex exec`는 요청이 실패해도 종료코드 0을 반환합니다.** 종료코드로 판정하면 실패를
 성공으로 읽습니다. 출력의 `ERROR:` 줄을 봐야 합니다.
+
+### `worker-release`의 `ok: true`는 "터미널을 닫았다"는 뜻이 아닙니다
+
+`terminal create`로 만든 터미널을 `worker-start --terminal`로 연결하면 Dispatch 수명주기는 감독되지만, 터미널 자원은 Orca 소유가 아니라 `external`로 기록됩니다. 이 워커를 release하면 실측 결과는 다음과 같았습니다:
+
+```
+worker-release --dispatch <id> --json
+→ ok: true, state: "retained", reason: "external_terminal", processAction: "none"   (exit 0)
+```
+
+터미널은 그대로 살아 있었고 `terminal close`를 실행해서야 종료되었습니다. 그래서 스킬은 release 영수증을 확인한 뒤, coordinator가 직접 만든 터미널에 한해 닫고 `terminal list`에서 핸들이 사라졌는지 확인합니다. 종료 코드나 `ok`만 보면 정리됐다고 오인합니다.
+
+같은 맥락에서 `worker-start`의 `ready`·`dispatch_input: accepted`도 워커가 살아 있다는 증거가 아닙니다. `worker-start --agent claude`로 띄운 워커가 입력 수락 직후 종료되고 `worker-read`가 빈 배열이었던 관측이 있습니다.
 
 ### `--model`은 메커니즘이 아니라 편의 기능입니다
 

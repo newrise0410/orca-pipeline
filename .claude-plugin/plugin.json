@@ -1,7 +1,7 @@
 {
   "name": "orca-pipeline",
-  "version": "0.3.0",
-  "description": "Three-role Orca pipeline (기획 → 기획검수 → 실행) on pinned agent sessions that survive across tasks.",
+  "version": "0.4.0",
+  "description": "Three-role Orca pipeline (기획 → 기획검수 → 실행): pinned planner and builder sessions reused across tasks, a fresh reviewer every unit.",
   "homepage": "https://github.com/newrise0410/orca-pipeline#readme",
   "repository": "https://github.com/newrise0410/orca-pipeline",
   "license": "MIT",

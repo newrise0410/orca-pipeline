@@ -1,126 +1,110 @@
 # orca-pipeline
 
-**기획 → 기획검수 → 실행**, 세 역할을 고정된 Orca 에이전트 세션에 붙여 돌리는 스킬.
+**기획 → 기획 검수 → 실행**, 3가지 역할을 전담 Orca 에이전트 세션에 고정하여 파이프라인 전체에서 재사용하는 오케스트레이션 스킬입니다.
 
-> A three-role Orca orchestration skill (plan → review → build) that **pins one agent
-> terminal per role and reuses it across tasks**, instead of spawning a fresh agent
-> session for every task.
+> A three-role Orca orchestration skill (plan → review → build) that **pins one agent terminal per role and reuses it across tasks**, instead of spawning a fresh agent session for every task.
 
 ---
 
 ## 무엇을 해결하는가
 
-Orca 오케스트레이션을 그냥 쓰면 태스크마다 에이전트 세션이 새로 뜹니다. 버그가 아니라
-문서화된 기본 동작입니다:
+Orca 오케스트레이션을 기본 설정대로 실행하면 태스크마다 에이전트 세션이 매번 새로 생성됩니다. 이는 버그가 아니라 공식 도움말에 명시된 기본 동작 방식입니다.
 
-> *"Current and existing worktrees never rerun setup; **a fresh agent terminal is created
-> unless `--terminal` is explicit**."* — `orca orchestration worker-start --help`
+> *"Current and existing worktrees never rerun setup; **a fresh agent terminal is created unless `--terminal` is explicit**."* — `orca orchestration worker-start --help`
 
-원인은 두 개입니다.
+이러한 동작이 발생하는 주원인은 다음과 같습니다.
 
-1. `worker-start --worktree current`는 호출마다 **새 에이전트 터미널**을 만든다.
-   재사용 경로는 `--terminal <handle>` 하나뿐이다.
-2. `worker_done` 뒤에 권장되는 `worker-release`가 **그 터미널을 닫는다.** 그래서 다음
-   태스크는 필연적으로 차가운 세션에서 시작한다.
+1. `worker-start --worktree current`는 호출할 때마다 **새로운 에이전트 터미널**을 생성합니다. 기존 세션을 재사용하는 방법은 `--terminal <handle>`을 명시하는 것뿐입니다.
+2. `worker_done` 완료 후 권장되는 `worker-release`는 **해당 터미널을 즉시 종료**합니다. 이로 인해 다음 태스크는 필연적으로 컨텍스트가 없는 콜드 세션(Cold Session)에서 다시 시작됩니다.
 
-결과적으로 기획자는 매번 프로젝트를 처음 보고, 실행자는 매번 코드베이스를 처음 읽습니다.
+그 결과 기획자는 매번 프로젝트의 맥락을 처음부터 파악해야 하고, 실행자 역시 매 태스크마다 코드베이스를 다시 분석해야 하는 비효율이 발생합니다.
 
-이 스킬은 역할별 터미널 핸들을 첫 실행에서 잡아두고(`worker-show` →
-`worker.agent_terminal_handle`), 이후 모든 태스크를 `--terminal <handle>`로 보냅니다.
-고정 역할은 파이프라인이 끝날 때까지 release하지 않고, 유휴 구간에는 `worker-retain`으로
-보존을 명시적으로 기록합니다.
+**orca-pipeline**은 첫 태스크 실행 시 역할별 터미널 핸들을 확보(`worker-show` → `worker.agent_terminal_handle`)한 뒤, 이후의 모든 태스크를 `--terminal <handle>`로 전달합니다. 고정된 역할 세션은 파이프라인이 종료될 때까지 해제(release)하지 않으며, 작업 대기 구간에서는 `worker-retain`을 통해 세션 보존 상태를 명시적으로 유지합니다.
+
+---
 
 ## 역할 편성
 
-| 역할 | 세션 정책 | 왜 |
+| 역할 | 세션 정책 | 정책 선정 이유 |
 |---|---|---|
-| **기획** planner | **고정** — 한 번 띄우고 재사용 | 프로젝트 컨텍스트 누적이 계획 품질에 직결 |
-| **기획검수** reviewer | **매번 새 세션** | 계획이 쓰여지는 과정을 못 본 상태로 판단해야 편향이 없다 |
-| **실행** builder | **고정** — 한 번 띄우고 재사용 | 코드베이스 이해 누적 |
+| **기획** (planner) | **고정** (단일 세션 재사용) | 프로젝트 컨텍스트의 연속적인 누적이 기획 완성도와 직결됨 |
+| **기획 검수** (reviewer) | **매번 신규 세션** (독립 세션) | 기획 수립 과정을 모르는 제3자의 시선에서 객관적으로 검증하여 확증 편향 방지 |
+| **실행** (builder) | **고정** (단일 세션 재사용) | 코드베이스 구조 및 수정 내역에 대한 이해도 누적 |
 
-검수자가 차가운 것은 의도입니다. 계획을 쓴 세션이 그 계획을 검수하면 통과 편향이 생깁니다.
+검수자 세션을 매번 새로 띄우는 것은 의도된 설계입니다. 계획을 직접 작성한 세션이 스스로 검수할 경우 무비판적으로 통과시키는 편향이 발생하기 때문입니다.
 
-반려(`VERDICT: REJECT`)는 파이프라인을 멈추지 않고 기획으로 되돌리지도 않습니다. 반려
-사유가 실행자 스펙의 **주의사항** 섹션으로 넘어가고, 실행자는 각 항목을 반영하거나
-반영하지 않는 이유를 `worker_done`에 명시해야 합니다. 묵살은 허용되지 않습니다.
+검수 단계에서 반려(`VERDICT: REJECT`)가 발생하더라도 전체 파이프라인이 중단되거나 기획 단계로 되돌아가지 않습니다. 대신 반려 사유가 실행자의 작업 명세서 내 **주의사항** 섹션으로 전달되며, 실행자는 각 지적 사항을 구현에 반영하거나 미반영 사유를 `worker_done` 보고 시 반드시 명시해야 합니다. (지적 사항 묵살 불가)
 
-## 시작 시 설정 — 모델은 발견하고, 박아두지 않는다
+---
 
-스킬은 `run-create` 전에 세 역할의 **에이전트·모델·에포트**를 물어봅니다. 다만 모델
-목록을 코드에 박아두지 않습니다. 모델명은 빠르게 낡습니다 — `gpt-5.5` → `gpt-5.6-luna`,
-`claude-opus-4-7` → `claude-opus-5`. 박아둔 목록은 출시 다음 주에 이미 거짓입니다.
+## 시작 시 설정: 모델 하드코딩 대신 동적 탐색(Discovery)
 
-그래서 매번 각 CLI의 **현재 설정**을 읽습니다:
+스킬 실행 전(`run-create`), 세 가지 역할에 할당할 **에이전트·모델·추론 강도(effort)**를 설정합니다. 이때 지원 모델 목록을 코드에 하드코딩하지 않습니다. 모델 명칭은 빠르게 갱신되기 때문입니다(`gpt-5.5` → `gpt-5.6-luna`, `claude-opus-4-7` → `claude-opus-5`). 하드코딩된 목록은 새로운 모델이 출시되는 즉시 구버전이 되어버립니다.
+
+따라서 실행 시점마다 각 CLI의 **현재 설정 정보**를 동적으로 탐색합니다.
 
 ```bash
 python skills/orca-pipeline/scripts/discover_models.py
 ```
 
-| 소스 | 읽는 것 |
+| 탐색 소스 | 수집 항목 |
 |---|---|
-| `<codex_home>/models_cache.json` | 모델 목록 — `slug`, `display_name`, `description`, **모델별 effort**, `priority`. `visibility: "hide"`인 내부 모델은 제외 |
-| `<codex_home>/config.toml` | `model`, `model_reasoning_effort`, `[profiles.*]` |
-| `claude --help` | `--model` 별칭(`fable`/`opus`/`sonnet`)과 `--effort` 레벨을 도움말에서 파싱 |
-| `~/.claude/settings.json` | `model` |
+| `<codex_home>/models_cache.json` | 모델 목록 (`slug`, `display_name`, `description`, **모델별 effort**, `priority`). 단, `visibility: "hide"`인 내부 모델 제외 |
+| `<codex_home>/config.toml` | 기본 설정 (`model`, `model_reasoning_effort`, `[profiles.*]`) |
+| `claude --help` | `--model` 별칭(`fable`/`opus`/`sonnet`) 및 지원 `--effort` 레벨 파싱 |
+| `~/.claude/settings.json` | 기본 모델 (`model`) |
 
-읽기 전용이고 예외를 던지지 않습니다. 소스가 없으면 해당 필드가 `null`/`[]`이 되고
-`warnings`에 사유가 담깁니다.
+이 탐색 스크립트는 읽기 전용으로 안전하게 동작하며 예외를 던져 실행을 중단시키지 않습니다. 설정 소스를 찾을 수 없는 경우 해당 필드는 `null` 또는 빈 배열(`[]`)로 처리되고 `warnings`에 그 사유가 기록됩니다.
 
-두 가지가 특히 중요합니다.
+특히 유의해야 할 두 가지 핵심 사항이 있습니다.
 
-**effort는 모델별입니다.** `gpt-5.6-sol`·`gpt-5.6-terra`는 `ultra`까지 받지만
-`gpt-5.6-luna`는 `max`까지, `gpt-5.5`는 `xhigh`까지입니다. 에이전트 단위로 하나의
-목록을 두면 거부되는 레벨을 제시하게 됩니다.
+1. **추론 강도(Effort)는 모델별로 상이합니다.**  
+   예를 들어 `gpt-5.6-sol`, `gpt-5.6-terra`는 `ultra`까지 지원하지만 `gpt-5.6-luna`는 `max`, `gpt-5.5`는 `xhigh`까지만 지원합니다. 에이전트 단위로 단일 목록을 강제하면 지원되지 않는 레벨이 선택되어 오류가 발생할 수 있습니다.
+2. **`CODEX_HOME`은 계정 단위로 분리됩니다.**  
+   Orca가 Codex 계정별로 환경변수를 재지정하므로, 한 머신 내에도 여러 캐시가 존재할 수 있고 **계정마다 모델 목록과 기본값이 서로 다릅니다.** (실측 예시):
 
-**`CODEX_HOME`은 계정 단위입니다.** Orca가 Codex 계정별로 이 변수를 재지정하므로 한
-머신에 캐시가 여러 개 있고 **모델 목록과 기본값이 서로 다릅니다.** 실측 예:
-
-| 홈 | 기본값 | 보이는 모델 |
+| 홈 경로 | 기본값 | 확인 가능한 모델 수 |
 |---|---|---|
 | `~/.codex` | `gpt-5.6-luna` / `medium` | 6개 (`gpt-5.4`, `gpt-5.4-mini` 포함) |
-| Orca 계정 홈 | `gpt-5.6-terra` / `xhigh` | 4개 |
+| Orca 계정 전용 홈 | `gpt-5.6-terra` / `xhigh` | 4개 |
 
-스크립트는 활성 홈의 목록만 보고하고 `other_homes`는 경로만 알려줍니다 — 계정마다
-권한이 다르므로 합치면 안 됩니다. 목록이 이상하면 `home`과 `home_from_env`를 먼저
-확인하세요.
+스크립트는 현재 활성화된 계정 홈의 목록만 수집하며, 다른 홈 경로(`other_homes`)는 단순 경로 정보만 제공합니다. 계정별 권한 범위가 다르므로 임의로 병합하지 않습니다. 모델 목록이 올바르지 않다면 `home` 및 `home_from_env` 값을 먼저 확인하세요.
 
-선택지는 항상 이 순서로 구성되고, **첫 번째가 권장값**입니다:
+선택지 목록은 다음 우선순위로 구성되며, **첫 번째 항목이 기본 권장값**입니다.
 
-1. **`CLI 기본값 그대로`** — `--model`/`--effort`를 아예 생략해 에이전트 CLI가 자기
-   현재 기본값을 쓰게 한다. 낡을 수 없는 유일한 선택지.
-2. Codex `[profiles.*]`에 정의된 프리셋
-3. Claude는 **별칭**(`opus`/`sonnet`/`haiku`) — `claude --help`가 `--model`을 *"an alias
-   for the latest model"*로 문서화하므로 별칭 자체가 업데이트를 따라간다
-4. Codex는 발견된 구체적 id
-5. 필요한 역할에만 effort 상향 변형
+1. **`CLI 기본값 그대로`**: `--model` 및 `--effort`를 지정하지 않고 각 에이전트 CLI의 현재 기본 설정을 사용합니다. 모델 변경에 구애받지 않는 가장 안정적인 옵션입니다.
+2. Codex `[profiles.*]` 프리셋
+3. Claude **별칭** (`opus`/`sonnet`/`haiku`): `claude --help`에 *"an alias for the latest model"*로 정의되어 있어 최신 모델 업데이트가 자동 반영됩니다.
+4. Codex 동적 탐색 id
+5. 특정 역할 전용 effort 상향 옵션
 
-검수 역할에는 **기획과 다른 제공자**를 권합니다. 같은 모델끼리는 같은 맹점을 공유합니다.
+> 기획과 검수 역할에는 서로 다른 모델 제공사(Provider)를 배정하는 것을 권장합니다. 동일한 계열의 모델은 유사한 맹점을 공유하기 쉽기 때문입니다.
 
-시작 시점에 묻는 이유가 있습니다 — **`--model`/`--effort`는 `--terminal`과 함께 쓸 수
-없습니다.** 고정 세션의 모델은 첫 실행에서 확정되고, 재사용 호출로는 바꿀 수 없습니다.
-중간에 바꾸려면 그 역할을 release → relaunch해야 하고 누적 컨텍스트가 사라집니다.
+### 실행 시작 시 모델 설정을 확정하는 이유
+
+Orca에서는 **`--model` 및 `--effort` 옵션을 세션 재사용 플래그(`--terminal`)와 함께 사용할 수 없습니다.** 고정 세션의 모델은 첫 생성 시점에 확정되며, 이후 재사용 호출로는 변경할 수 없습니다. 중간에 모델을 변경하려면 해당 역할을 해제(release)한 뒤 새로 실행(relaunch)해야 하며, 이 경우 기존에 누적된 컨텍스트가 모두 소실됩니다.
 
 ---
 
-## 설치
+## 설치 방법
 
 ### 1. 플러그인 마켓플레이스 (권장)
 
-Claude Code 안에서:
+Claude Code 환경에서 아래 명령어를 실행합니다.
 
 ```
 /plugin marketplace add newrise0410/orca-pipeline
 /plugin install orca-pipeline
 ```
 
-업데이트는 `/plugin update orca-pipeline`. 버전 관리와 갱신이 내장된 유일한 경로입니다.
+- 업데이트: `/plugin update orca-pipeline`
+- 자체 버전 관리 및 업데이트 기능을 온전히 지원하는 권장 설치 경로입니다.
 
-> 이미 `~/.claude/skills/orca-pipeline/`에 직접 넣어 쓰고 있었다면, 플러그인 설치 후
-> 그 디렉터리를 지우세요. 같은 이름의 스킬이 두 벌 잡힙니다.
+> **주의:** 기존에 `~/.claude/skills/orca-pipeline/` 경로에 수동으로 복사해 사용 중이었다면 플러그인 설치 후 해당 수동 디렉터리를 삭제해 주세요. 동일한 이름의 스킬이 중복 인식될 수 있습니다.
 
 ### 2. git clone + 심볼릭 링크
 
-Claude Code 플러그인 시스템을 쓰지 않는 호스트(Codex, 직접 구성한 하네스 등)용.
+Claude Code 플러그인 시스템을 사용하지 않는 환경(Codex, 자체 구축 하네스 등)에 적합합니다.
 
 ```bash
 git clone https://github.com/newrise0410/orca-pipeline.git ~/src/orca-pipeline
@@ -128,61 +112,61 @@ git clone https://github.com/newrise0410/orca-pipeline.git ~/src/orca-pipeline
 # Linux / macOS
 ln -s ~/src/orca-pipeline/skills/orca-pipeline ~/.claude/skills/orca-pipeline
 
-# Windows (PowerShell, 관리자 권한 또는 개발자 모드)
+# Windows (PowerShell, 관리자 권한 또는 개발자 모드 필요)
 New-Item -ItemType SymbolicLink `
   -Path "$env:USERPROFILE\.claude\skills\orca-pipeline" `
   -Target "$HOME\src\orca-pipeline\skills\orca-pipeline"
 ```
 
-심볼릭 링크라 `git pull`이 곧 업데이트입니다.
+심볼릭 링크 방식이므로 저장소에서 `git pull`만 수행하면 즉시 최신 버전으로 업데이트됩니다.
 
-### 3. 복사
+### 3. 디렉터리 직접 복사
 
-링크가 부담스러우면 그냥 복사해도 됩니다. 대신 업데이트를 직접 챙겨야 합니다.
+심볼릭 링크 사용이 어려운 환경에서는 파일을 직접 복사하여 설치할 수 있습니다. (추후 업데이트는 수동으로 진행해야 합니다.)
 
 ```bash
 cp -r skills/orca-pipeline ~/.claude/skills/
 ```
 
-### npm 전역설치를 쓰지 않는 이유
+### npm 전역 설치 방식을 사용하지 않는 이유
 
-스킬은 마크다운 파일 하나입니다. npm 전역설치는 이 배포에 맞지 않습니다.
+본 스킬은 단일 마크다운 및 스크립트 기반 구성이므로 npm 전역 패키지 배포 방식은 적합하지 않습니다.
 
-- **런타임 의존성이 생긴다.** JS가 한 줄도 없는데 Node를 요구하게 된다.
-- **파일을 원하는 곳에 놓을 수 없다.** npm 패키지가 `~/.claude/skills/`에 쓰려면
-  `postinstall`로 자기 패키지 디렉터리 밖에 쓰는 수밖에 없다. `--ignore-scripts`면
-  조용히 아무 일도 일어나지 않고, 요즘 npm 생태계는 postinstall 부작용을 줄이는
-  방향으로 가고 있다.
-- **갱신이 수동이다.** 사용자가 `npm update -g`를 기억해야 한다. 플러그인
-  마켓플레이스는 `/plugin update`가 내장이다.
-- **발견 경로가 어긋난다.** Claude Code 사용자는 스킬을 npm에서 찾지 않는다.
+- **불필요한 런타임 의존성:** JavaScript 코드가 없음에도 사용자에게 Node.js 런타임을 요구하게 됩니다.
+- **경로 배치 제약:** npm 패키지가 사용자 스킬 디렉터리(`~/.claude/skills/`)에 접근하려면 `postinstall` 스크립트를 통해 패키지 외부 영역에 파일을 써야 합니다. 이는 `--ignore-scripts` 환경에서 정상 동작하지 않으며, 최근 npm 생태계의 보안 권장 사항에도 부합하지 않습니다.
+- **수동 갱신 번거로움:** 사용자가 직접 `npm update -g`를 주기적으로 실행해야 합니다. 반면 플러그인 마켓플레이스는 `/plugin update` 명령어를 내장하고 있습니다.
+- **스킬 탐색 경로 불일치:** Claude Code 사용자는 필요한 스킬을 npm 저장소가 아닌 플러그인 마켓플레이스에서 탐색합니다.
 
-한 줄 설치가 목적이라면 npm보다 `/plugin marketplace add`가 이미 더 짧습니다.
+한 줄 설치 편의성 측면에서도 npm보다 `/plugin marketplace add` 명령어가 더 간결합니다.
 
 ---
 
-## 사용
+## 사용법
 
 ```
 /orca-pipeline
 ```
 
-또는 자연어로 — "파이프라인으로 돌려줘", "기획→검수→실행으로", "아스트라로 기획하고
-클로드로 검수해줘", "세션 재사용해서 진행" 등에서 자동으로 걸립니다.
+또는 아래와 같은 자연어 프롬프트로도 자동 트리거됩니다.
 
-일감 하나(unit)마다 기획 → 검수 → 실행이 한 바퀴 돌고, 다음 unit은 같은 기획·실행
-세션을 재사용합니다.
+- *"파이프라인으로 돌려줘"*
+- *"기획 → 검수 → 실행으로 진행해줘"*
+- *"아스트라로 기획하고 클로드로 검수해줘"*
+- *"세션 재사용해서 진행"*
+
+각 작업 단위(Unit)마다 **[기획 → 검수 → 실행]** 순서로 1사이클이 수행되며, 후속 작업 단위에서도 앞서 생성된 기획 및 실행 세션을 그대로 재사용하여 작업 연속성을 유지합니다.
+
+---
 
 ## 요구사항
 
-- **Orca** 1.4.x 이상, 런타임 실행 중 (`orca status --json` → `state: ready`)
-- Settings → Experimental 에서 **orchestration** 활성화
-- 코디네이터(루트) 터미널에서 실행. nested worker depth 기본값이 1이라 워커 안에서
-  호출하면 `nested_worker_depth_exceeded`로 실패합니다 — 이건 우회하지 말고 보고하고
-  멈추는 것이 맞습니다.
-- 각 역할에 쓸 에이전트 CLI가 PATH에 있어야 합니다. `--model`/`--effort`는 **Claude,
-  Codex, Cursor**에만 전달됩니다. 다른 에이전트를 고르면 스킬이 두 플래그를 떼고
-  그 사실을 알립니다.
+- **Orca** 1.4.x 이상 및 런타임 활성화 상태 (`orca status --json` 기준 `state: ready`)
+- Orca 설정(Settings → Experimental) 내 **orchestration** 기능 활성화
+- **루트(Coordinator) 터미널에서 실행 필수:** Orca의 기본 중첩 워커 깊이(nested worker depth) 제한은 1입니다. 워커 세션 내부에서 중첩 호출할 경우 `nested_worker_depth_exceeded` 에러로 실패합니다. (이는 비정상 우회 대신 즉시 원인을 보고하고 중단하는 것이 올바른 동작입니다.)
+- 각 역할에 지정할 에이전트 CLI가 시스템 환경변수(`PATH`)에 등록되어 있어야 합니다.
+- `--model` 및 `--effort` 옵션은 **Claude, Codex, Cursor** CLI에만 전달됩니다. 다른 에이전트 CLI를 지정한 경우 해당 플래그를 자동으로 제외한 뒤 안내 메시지를 출력합니다.
+
+---
 
 ## 라이선스
 
